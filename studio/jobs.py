@@ -111,7 +111,7 @@ DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "la
             "range_start": None, "range_end": None}
 
 
-LIMITS = {"max_clips": (1, 20), "min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
+LIMITS = {"min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
 
 
 def clean_options(options) -> dict:
@@ -120,7 +120,14 @@ def clean_options(options) -> dict:
     for k, v in (options if isinstance(options, dict) else {}).items():
         if k not in DEFAULTS or v in ("", None):
             continue
-        if k in LIMITS:
+        if k == "max_clips":
+            v = float(v)
+            if not math.isfinite(v):
+                raise ValueError("Choose a valid clip count.")
+            v = int(v)
+            if v < 1:
+                raise ValueError("Choose at least 1 clip.")
+        elif k in LIMITS:
             lo, hi = LIMITS[k]
             v = max(lo, min(hi, int(float(v))))
         elif k == "style":

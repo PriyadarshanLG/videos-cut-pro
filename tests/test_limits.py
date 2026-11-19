@@ -7,7 +7,7 @@ for k in ("PEAKCUT_MAX_LIVE_PER_USER", "PEAKCUT_MAX_JOBS_PER_USER", "PEAKCUT_MAX
     os.environ.pop(k, None)
 os.environ.update(DATABASE_URL="", PEAKCUT_MAX_LIVE="20")
 sys.path.insert(0, ".")
-from studio import auth, config, creators, ctx, db, live, load
+from studio import auth, config, creators, ctx, db, jobs, live, load
 db.init()
 fails = []
 def check(n, got, want=True):
@@ -18,6 +18,7 @@ check("five videos at once", config.MAX_ACTIVE_JOBS_PER_USER, 5)
 check("no cap on recordings, video length, recording length, storage, uploads or creators",
       all(x >= 10 ** 6 for x in (config.MAX_LIVE_PER_USER, config.MAX_VIDEO_HOURS, config.MAX_LIVE_HOURS, config.MAX_USER_GB,
                                  config.MAX_UPLOAD_MB, config.MAX_CREATORS)))
+check("more than 20 clips are accepted", jobs.clean_options({"max_clips": 100})["max_clips"], 100)
 
 u, _ = auth._create("owner@example.com", "Owner", password_hash="x")
 started = []
