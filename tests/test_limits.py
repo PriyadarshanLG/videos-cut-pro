@@ -27,6 +27,7 @@ load.busy = lambda: False
 with ctx.as_user(u.id):
     cs = [creators.create({"name": f"Streamer {i}", "channel": f"https://www.twitch.tv/streamer{i}"}) for i in range(60)]
     check("more than 50 creators can be added", len(creators.all_creators()), 60)
+    check("more than 20 clips are saved for a creator", creators.update(cs[0]["id"], {"max_clips": 100})["max_clips"], 100)
     jobs_ = [live.start_session(c) for c in cs[:4]]
     check("four streams record at once", len(live.active_mine()), 4)
     check("each recording belongs to the creator it was started for", [j["creator"] for j in jobs_], [c["id"] for c in cs[:4]])

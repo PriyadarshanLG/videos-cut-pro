@@ -180,9 +180,20 @@ def save(job):
                 time.sleep(0.05)
         else:
             return
-        tmp = d / "job.json.tmp"
+        target = d / "job.json"
+        tmp = d / f"job-{uuid.uuid4().hex}.tmp"
         tmp.write_text(text, encoding="utf-8")
-        tmp.replace(d / "job.json")
+        for _ in range(20):
+            try:
+                tmp.replace(target)
+                break
+            except PermissionError:
+                time.sleep(0.05)
+        else:
+            try:
+                target.write_text(text, encoding="utf-8")
+            finally:
+                tmp.unlink(missing_ok=True)
 
 
 def _set(job, **kw):
