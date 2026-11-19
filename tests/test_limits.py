@@ -19,6 +19,27 @@ check("no cap on recordings, video length, recording length, storage, uploads or
       all(x >= 10 ** 6 for x in (config.MAX_LIVE_PER_USER, config.MAX_VIDEO_HOURS, config.MAX_LIVE_HOURS, config.MAX_USER_GB,
                                  config.MAX_UPLOAD_MB, config.MAX_CREATORS)))
 check("more than 20 clips are accepted", jobs.clean_options({"max_clips": 100})["max_clips"], 100)
+check("manual range seconds convert correctly", jobs.parse_manual_range("45"), 45)
+check("manual range M:SS converts correctly", jobs.parse_manual_range("1:20"), 80)
+check("manual range H:MM:SS converts correctly", jobs.parse_manual_range("1:20:15"), 4815)
+manual = jobs.clean_options({"mode": "manual", "manual_ranges": [
+    {"start": "10", "end": "50"},
+    {"start": "1:20", "end": "1:50"},
+]})
+check("manual ranges keep serial order", [x["order"] for x in manual["manual_ranges"]], [1, 2])
+check("manual ranges preserve exact seconds", [(x["start"], x["end"]) for x in manual["manual_ranges"]], [(10, 50), (80, 110)])
+try:
+    jobs.clean_options({"mode": "manual", "manual_ranges": [{"start": "1:50", "end": "1:20"}]})
+    reversed_range = "accepted"
+except ValueError as e:
+    reversed_range = str(e)
+check("reversed manual ranges are refused", "ends before" in reversed_range, True)
+try:
+    jobs.parse_manual_range("1:99")
+    invalid_range = "accepted"
+except ValueError as e:
+    invalid_range = str(e)
+check("invalid manual time is refused", "seconds must be below" in invalid_range, True)
 
 u, _ = auth._create("owner@example.com", "Owner", password_hash="x")
 started = []

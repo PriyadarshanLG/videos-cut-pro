@@ -4,6 +4,7 @@ import json
 import os
 import math
 import queue
+import re
 import shutil
 import threading
 import time
@@ -107,11 +108,38 @@ _by_user: dict = {}                       # user -> {job id: job}: listing one p
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
+DEFAULTS = {"mode": "auto", "manual_ranges": [], "max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
             "range_start": None, "range_end": None}
 
 
 LIMITS = {"min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
+
+
+def parse_manual_range(value):
+    """Turn seconds or M:SS/H:MM:SS into seconds."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        result = float(value)
+    else:
+        text = str(value).strip().replace(",", ".")
+        if not text:
+            return None
+        parts = text.split(":")
+        if len(parts) > 3 or any(not p.strip() or not re.fullmatch(r"\d+(?:\.\d+)?", p.strip()) for p in parts):
+            raise ValueError("Use seconds or M:SS, such as 10, 00:10, or 1:20.")
+        nums = [float(p) for p in parts]
+        if len(nums) == 1:
+            result = nums[0]
+        elif len(nums) == 2:
+            if nums[1] >= 60:
+                raise ValueError("In M:SS, the seconds must be below 60.")
+            result = nums[0] * 60 + nums[1]
+        else:
+            if nums[1] >= 60 or nums[2] >= 60:
+                raise ValueError("In H:MM:SS, the minutes and seconds must be below 60.")
+            result = nums[0] * 3600 + nums[1] * 60 + nums[2]
+    if not math.isfinite(result) or result < 0:
+        raise ValueError("Clip times must be zero or greater.")
+    return round(result, 2)
 
 
 def clean_options(options) -> dict:
@@ -127,6 +155,23 @@ def clean_options(options) -> dict:
             v = int(v)
             if v < 1:
                 raise ValueError("Choose at least 1 clip.")
+        elif k == "mode":
+            v = v if v in ("auto", "manual") else "auto"
+        elif k == "manual_ranges":
+            if not isinstance(v, list):
+                raise ValueError("Manual clip ranges must be a list.")
+            ranges = []
+            for index, item in enumerate(v):
+                if not isinstance(item, dict):
+                    raise ValueError(f"Clip {index + 1} needs a start and end time.")
+                start = parse_manual_range(item.get("start"))
+                end = parse_manual_range(item.get("end"))
+                if start is None or end is None:
+                    raise ValueError(f"Clip {index + 1} needs both start and end times.")
+                if end <= start:
+                    raise ValueError(f"Clip {index + 1} ends before it starts.")
+                ranges.append({"start": start, "end": end, "order": index + 1})
+            v = ranges
         elif k in LIMITS:
             lo, hi = LIMITS[k]
             v = max(lo, min(hi, int(float(v))))
@@ -141,6 +186,9 @@ def clean_options(options) -> dict:
         out[k] = v
     if out.get("range_end") is not None and out["range_end"] <= out.get("range_start", 0):
         raise ValueError("The end of the chosen part must be after its start.")
+    if out.get("mode") == "manual":
+        if not out.get("manual_ranges"):
+            raise ValueError("Add at least one manual clip range.")
     return out
 
 
@@ -594,7 +642,19 @@ def _run_job(job):
         began[clip["id"]] = time.time()
         if src["type"] == "url" and (pieces or not whole_video()):
             _fetch_piece(job, clip, audio)
-        if clip["status"] != "error" and yt and yt[1].lower().startswith("en"):
+        if o["mode"] == "manual":
+            try:
+                a0 = max(0, int((clip["start"] - 1.5) * 16000))
+                b0 = min(len(audio), int((clip["end"] + 1.5) * 16000))
+                tw = transcribe.transcribe(audio[a0:b0])
+                if tw:
+                    tw = [dict(w, s=round(w["s"] + a0 / 16000, 2),
+                               e=round(w["e"] + a0 / 16000, 2)) for w in tw]
+                    exact[clip["id"]] = (a0 / 16000, b0 / 16000, tw)
+                    words_now = tw
+            except Exception:  # captions remain optional if transcription fails
+                pass
+        if o["mode"] != "manual" and clip["status"] != "error" and yt and yt[1].lower().startswith("en"):
             # The clip was found with YouTube's transcript. What is shown on screen comes from our own model,
             # run on just this clip: full punctuation, nothing blanked out, timings to the word.
             a0, b0 = max(lo, int((clip["start"] - 1.5) * 16000)), min(hi, int((clip["end"] + 1.5) * 16000))
@@ -640,6 +700,35 @@ def _run_job(job):
                 c["status"] = "queued"
                 futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
         save(job)
+    if o["mode"] == "manual":
+        _set(job, stage="Preparing your exact clip ranges", progress=0.14)
+        if not o["manual_ranges"]:
+            raise ValueError("Add at least one manual clip range.")
+        if not resuming:
+            for item in o["manual_ranges"]:
+                start, end = float(item["start"]), float(item["end"])
+                if job["duration"] and end > job["duration"]:
+                    raise ValueError(f"Clip {item['order']} ends after the video ({parse_manual_range(job['duration']):g}s).")
+                if end - start < 3:
+                    raise ValueError(f"Clip {item['order']} must be at least 3 seconds long.")
+                clip = {"id": f"clip{item['order']:02d}", "start": start, "end": end,
+                        "style": o["style"], "layout": o["layout"], "status": "queued", "version": 0,
+                        "score": 100, "hook": "", "title": f"Clip {item['order']}",
+                        "description": "", "hashtags": [], "reason": "Manually selected range", "order": item["order"]}
+                job["clips"].append(clip)
+                futures.append((renders.submit(ctx.bind(make), clip, []), clip))
+        (d / "words.json").write_text("[]", encoding="utf-8")
+        job["done_blocks"] = len(blocks)
+        job["ai"] = {"model": None, "tokens": 0, "note": "Clips made from manually selected ranges.", "log": []}
+        save(job)
+        if futures:
+            _set(job, stage="Finishing the clips", progress=0.92)
+        _wait_for_clips(job, futures, began, renders._max_workers)
+        renders.shutdown(wait=False)
+        fetch.shutdown(wait=False)
+        del audio
+        _set(job, status="done", stage="Done", progress=1.0, took=round(time.time() - t0))
+        return
     # The transcript of the next part is written while the AI is still reading this one (the AI is a wait on the
     # network, the transcript is work on this machine), so neither waits for the other.
     ahead = ThreadPoolExecutor(2, thread_name_prefix="ahead")

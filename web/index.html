@@ -399,6 +399,18 @@ img.av{object-fit:cover}
 .composer.compact .range label{background:var(--muted)}
 .range input,.range input:focus{flex:1;min-width:0;height:40px;border:0;background:transparent;padding:0;font-size:15px;font-weight:600;color:var(--brand-ink);-moz-appearance:textfield}
 .range>svg{width:14px;height:14px;color:var(--faint);flex:none}
+.mode-tabs{display:flex;gap:6px;margin-bottom:10px}
+.mode-tabs button{height:34px;padding:0 12px;border:1px solid var(--line-2);border-radius:9px;background:#fff;color:var(--dim);font-size:12px;font-weight:700;cursor:pointer}
+.mode-tabs button[aria-pressed=true]{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-ink)}
+.manual-ranges{display:flex;flex-direction:column;gap:8px}
+.manual-range{display:grid;grid-template-columns:32px minmax(90px,1fr) 16px minmax(90px,1fr) 34px;align-items:center;gap:8px}
+.manual-range>b{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand-ink);font-size:12px}
+.manual-range input{height:38px!important;text-align:center;font-size:13px!important}
+.manual-range>svg{width:14px;color:var(--faint)}
+.manual-range button{width:34px;height:34px;border:0;border-radius:9px;background:var(--muted);color:var(--dim);display:grid;place-items:center;cursor:pointer}
+.manual-range button:hover{background:#FDE5D8;color:var(--brand-deep)}
+.manual-range button svg{width:14px;height:14px}
+.manual-add{height:36px!important;margin-top:8px;border:1px dashed var(--line-2)!important;background:transparent!important;color:var(--dim)!important}
 @media (max-width:640px){.og{grid-template-columns:1fr}.nsteps{grid-template-columns:1fr}}
 
 /* ---------- home blocks */
@@ -1358,11 +1370,22 @@ function drawAdd(variant) {
       <button class="btn primary" id="goBtn">${ic("scissors")}Make clips</button>
     </div>
     <div class="composer-opts" inert><div class="og">
-      <div class="ob wide"><div class="ot">Clips</div><div class="nsteps">
-        ${stepper("o_max", "How many", c?.max_clips ?? 6, 1, "", 1, "")}
-        ${stepper("o_min", "Shortest", c?.min_len ?? 15, 5, 120, 5, "s")}
-        ${stepper("o_maxlen", "Longest", c?.max_len ?? 60, 10, 180, 5, "s")}
-      </div></div>
+      <div class="ob wide"><div class="ot">Clip mode</div>
+        <input type="hidden" id="o_mode" value="auto">
+        <div class="mode-tabs" role="group" aria-label="Clip mode">
+          <button type="button" data-seg="o_mode" data-v="auto" aria-pressed="true">Auto — find clips</button>
+          <button type="button" data-seg="o_mode" data-v="manual" aria-pressed="false">Manual — choose ranges</button>
+        </div>
+        <div id="autoOptions" class="nsteps">
+          ${stepper("o_max", "How many", c?.max_clips ?? 6, 1, "", 1, "")}
+          ${stepper("o_min", "Shortest", c?.min_len ?? 15, 5, 120, 5, "s")}
+          ${stepper("o_maxlen", "Longest", c?.max_len ?? 60, 10, 180, 5, "s")}
+        </div>
+        <div id="manualOptions" class="manual-ranges" hidden>
+          <div class="manual-range" data-range="1"><b>1</b><input type="text" data-start placeholder="Start, e.g. 1:20"><span style="text-align:center">to</span><input type="text" data-end placeholder="End, e.g. 1:50"><button type="button" data-act="remrange" data-range="1" aria-label="Remove clip 1">${ic("trash")}</button></div>
+          <button type="button" class="btn manual-add" data-act="addrange">${ic("plus")}Add another clip range</button>
+        </div>
+      </div>
       <div class="ob"><div class="ot">Caption style</div>${choice("o_style", Object.entries(S.status.styles).map(([k, v]) => ({v:k, label:v, prev:capPrev(k)})), c?.style ?? "bounce")}</div>
       <div class="ob"><div class="ot">Layout</div>${choice("o_layout", Object.entries(S.status.layouts).map(([k, v]) => ({v:k, label:LAYOUT_SHORT[k] || v, title:v, prev:`<span class="lay-prev ${esc(k)}"><span class="ph"><i></i></span></span>`})), c?.layout ?? "blur")}</div>
       <div class="ob"><div class="ot">Video quality</div><input type="hidden" id="o_quality" value="720"><div class="seg" role="group" aria-label="Video quality">
@@ -1412,7 +1435,14 @@ document.addEventListener("click", e => {
   if (!e.target.closest(".pick") || e.target.closest(".pick-new")) closePicks();
   const sg = e.target.closest("[data-seg]");
   if (sg) { $("#" + sg.dataset.seg).value = sg.dataset.v;
-    sg.parentElement.querySelectorAll("[data-seg]").forEach(b => b.setAttribute("aria-pressed", String(b === sg))); return; }
+    sg.parentElement.querySelectorAll("[data-seg]").forEach(b => b.setAttribute("aria-pressed", String(b === sg)));
+    if (sg.dataset.seg === "o_mode") {
+      const manual = sg.dataset.v === "manual";
+      $("#autoOptions").hidden = manual;
+      $("#manualOptions").hidden = !manual;
+      $("#goBtn").innerHTML = manual ? `${ic("scissors")}Make manual clips` : `${ic("scissors")}Make clips`;
+    }
+    return; }
   const st = e.target.closest("[data-step]");
   if (st) { const i = $("#" + st.dataset.step), s = Number(i.step) || 1, d = Number(st.dataset.d);
     const next = (Number(i.value) || 0) + d * s;
@@ -1431,7 +1461,13 @@ document.addEventListener("keydown", e => {
 const targetCreator = () => creatorId() || $("#o_creator")?.value || "";
 function jobOptions() {
   const n = id => { const v = $(id).value; return v === "" ? null : Number(v); };
-  const o = {max_clips:n("#o_max"), min_len:n("#o_min"), max_len:n("#o_maxlen"), style:$("#o_style").value, layout:$("#o_layout").value, quality:n("#o_quality")};
+  const o = {mode:$("#o_mode")?.value || "auto", max_clips:n("#o_max"), min_len:n("#o_min"), max_len:n("#o_maxlen"), style:$("#o_style").value, layout:$("#o_layout").value, quality:n("#o_quality")};
+  if (o.mode === "manual") {
+    o.manual_ranges = $$(".manual-range").map(row => ({
+      start: row.querySelector("[data-start]").value.trim(),
+      end: row.querySelector("[data-end]").value.trim()
+    })).filter(r => r.start || r.end);
+  }
   if (n("#o_from") !== null) o.range_start = n("#o_from") * 60;
   if (n("#o_to") !== null) o.range_end = n("#o_to") * 60;
   return o;
@@ -1618,6 +1654,18 @@ function sendFile(f, who) {
 async function makeClips() {
   const A = att();
   if (A.busy) return;
+  if ($("#o_mode")?.value === "manual") {
+    const rows = $$(".manual-range");
+    const ranges = rows.map((row, i) => ({
+      number: i + 1,
+      start: row.querySelector("[data-start]").value.trim(),
+      end: row.querySelector("[data-end]").value.trim()
+    }));
+    if (!ranges.length) { toast("Add at least one manual clip range.", "bad"); return; }
+    for (const r of ranges) {
+      if (!r.start || !r.end) { toast(`Clip ${r.number} needs both a start and end time.`, "bad"); return; }
+    }
+  }
   const typed = $("#url")?.value.trim();
   if (typed && looksLink(typed) && !isChannel(typed)) { clearTimeout(linkTimer); takeLink(A, typed, $("#url")); }
   if (A.links.some(l => l.state === "wait")) {   // still looking a link up: start as soon as it is found
@@ -2214,6 +2262,28 @@ document.addEventListener("click", async e => {
   const a = b.dataset.act, d = b.dataset;
   if (b.tagName === "A") e.preventDefault();
   try {
+    if (a === "addrange") {
+      const box = $("#manualOptions");
+      const add = box.querySelector(".manual-add");
+      const n = box.querySelectorAll(".manual-range").length + 1;
+      add.insertAdjacentHTML("beforebegin", `<div class="manual-range" data-range="${n}"><b>${n}</b><input type="text" data-start placeholder="Start, e.g. 1:20"><span style="text-align:center">to</span><input type="text" data-end placeholder="End, e.g. 1:50"><button type="button" data-act="remrange" data-range="${n}" aria-label="Remove clip ${n}">${ic("trash")}</button></div>`);
+      box.querySelectorAll(".manual-range").forEach((row, i) => {
+        row.querySelector("b").textContent = i + 1;
+        row.querySelector("button").dataset.range = i + 1;
+      });
+      box.querySelector(".manual-range:last-of-type input")?.focus();
+      return;
+    }
+    if (a === "remrange") {
+      const box = $("#manualOptions");
+      b.closest(".manual-range")?.remove();
+      box.querySelectorAll(".manual-range").forEach((row, i) => {
+        row.querySelector("b").textContent = i + 1;
+        row.querySelector("button").dataset.range = i + 1;
+      });
+      if (!box.querySelector(".manual-range")) box.querySelector(".manual-add").insertAdjacentHTML("beforebegin", `<div class="manual-range" data-range="1"><b>1</b><input type="text" data-start placeholder="Start, e.g. 1:20"><span style="text-align:center">to</span><input type="text" data-end placeholder="End, e.g. 1:50"><button type="button" data-act="remrange" data-range="1" aria-label="Remove clip 1">${ic("trash")}</button></div>`);
+      return;
+    }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
     if (a === "aimodels") {
       b.disabled = true;
